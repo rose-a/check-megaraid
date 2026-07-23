@@ -1,0 +1,25 @@
+CLI Version = 007.2309.0000.0000 Sep 16, 2022
+Operating system = Linux 6.17.4-2-pve
+Controller = 0
+Status = Success
+Description = None
+
+
+Virtual Drives :
+==============
+
+---------------------------------------------------------------
+DG/VD TYPE  State Access Consist Cache Cac sCC       Size Name 
+---------------------------------------------------------------
+0/0   RAID5 Optl  RW     Yes     NRWTD -   OFF   7.276 TB VG1  
+1/1   RAID1 Optl  RW     Yes     NRWTD -   OFF 237.968 GB OS   
+---------------------------------------------------------------
+
+VD=Virtual Drive| DG=Drive Group|Rec=Recovery
+Cac=CacheCade|OfLn=OffLine|Pdgd=Partially Degraded|Dgrd=Degraded
+Optl=Optimal|dflt=Default|RO=Read Only|RW=Read Write|HD=Hidden|TRANS=TransportReady
+B=Blocked|Consist=Consistent|R=Read Ahead Always|NR=No Read Ahead|WB=WriteBack
+AWB=Always WriteBack|WT=WriteThrough|C=Cached IO|D=Direct IO|sCC=Scheduled
+Check Consistency
+
+

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run MegaRAID health check every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Persistent=true
+Unit=check-megaraid.service
+
+[Install]
+WantedBy=timers.target

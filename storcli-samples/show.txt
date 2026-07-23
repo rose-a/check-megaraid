@@ -1,0 +1,26 @@
+CLI Version = 007.2309.0000.0000 Sep 16, 2022
+Operating system = Linux 6.17.4-2-pve
+Status Code = 0
+Status = Success
+Description = None
+
+Number of Controllers = 1
+Host Name = pve1
+Operating System  = Linux 6.17.4-2-pve
+
+System Overview :
+===============
+
+------------------------------------------------------------------------
+Ctl Model       Ports PDs DGs DNOpt VDs VNOpt BBU sPR DS  EHS ASOs Hlth 
+------------------------------------------------------------------------
+  0 PRAIDCP400i     8   6   2     0   2     0 N/A On  1&2 N      2 Opt  
+------------------------------------------------------------------------
+
+Ctl=Controller Index|DGs=Drive groups|VDs=Virtual drives|Fld=Failed
+PDs=Physical drives|DNOpt=Array NotOptimal|VNOpt=VD NotOptimal|Opt=Optimal
+Msng=Missing|Dgd=Degraded|NdAtn=Need Attention|Unkwn=Unknown
+sPR=Scheduled Patrol Read|DS=DimmerSwitch|EHS=Emergency Spare Drive
+Y=Yes|N=No|ASOs=Advanced Software Options|BBU=Battery backup unit/CV
+Hlth=Health|Safe=Safe-mode boot|CertProv-Certificate Provision mode
+Chrg=Charging | MsngCbl=Cable Failure

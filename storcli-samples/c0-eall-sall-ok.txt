@@ -1,0 +1,30 @@
+CLI Version = 007.2309.0000.0000 Sep 16, 2022
+Operating system = Linux 6.17.4-2-pve
+Controller = 0
+Status = Success
+Description = Show Drive Information Succeeded.
+
+
+Drive Information :
+=================
+
+---------------------------------------------------------------------------------------
+EID:Slt DID State DG       Size Intf Med SED PI SeSz Model                     Sp Type 
+---------------------------------------------------------------------------------------
+62:0     18 DHS   0    3.637 TB SAS  HDD N   N  512B ST4000NM0023              D  -    
+62:1     15 Onln  0    3.637 TB SAS  HDD N   N  512B ST4000NM0023              U  -    
+62:2     13 Onln  0    3.637 TB SAS  HDD N   N  512B ST4000NM0023              U  -    
+62:3     12 Onln  0    3.637 TB SAS  HDD N   N  512B ST4000NM0023              U  -    
+62:4     16 Onln  1  237.968 GB SATA SSD N   N  512B Samsung SSD 860 PRO 256GB U  -    
+62:5     17 Onln  1  237.968 GB SATA SSD N   N  512B Samsung SSD 860 PRO 256GB U  -    
+---------------------------------------------------------------------------------------
+
+EID=Enclosure Device ID|Slt=Slot No|DID=Device ID|DG=DriveGroup
+DHS=Dedicated Hot Spare|UGood=Unconfigured Good|GHS=Global Hotspare
+UBad=Unconfigured Bad|Sntze=Sanitize|Onln=Online|Offln=Offline|Intf=Interface
+Med=Media Type|SED=Self Encryptive Drive|PI=Protection Info
+SeSz=Sector Size|Sp=Spun|U=Up|D=Down|T=Transition|F=Foreign
+UGUnsp=UGood Unsupported|UGShld=UGood shielded|HSPShld=Hotspare shielded
+CFShld=Configured shielded|Cpybck=CopyBack|CBShld=Copyback Shielded
+UBUnsp=UBad Unsupported|Rbld=Rebuild
+

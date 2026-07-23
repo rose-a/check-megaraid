@@ -1,0 +1,117 @@
+Generating detailed summary of the adapter, it may take a while to complete.
+
+CLI Version = 007.2309.0000.0000 Sep 16, 2022
+Operating system = Linux 6.17.4-2-pve
+Controller = 0
+Status = Success
+Description = None
+
+Product Name = PRAID CP400i
+Serial Number = 0000000058086159
+SAS Address =  5003005711c82410
+PCI Address = 00:01:00:00
+System Time = 07/23/2026 21:44:04
+Mfg. Date = 00/00/00
+Controller Time = 07/23/2026 20:06:03
+FW Package Build = 24.7.0-0061
+BIOS Version = 6.22.03.1_4.16.08.00_0x060B0201
+FW Version = 4.270.01-4870
+Driver Name = megaraid_sas
+Driver Version = 07.734.00.00-rc1
+Vendor Id = 0x1000
+Device Id = 0x5F
+SubVendor Id = 0x1734
+SubDevice Id = 0x1211
+Host Interface = PCI-E
+Device Interface = SAS-12G
+Bus Number = 1
+Device Number = 0
+Function Number = 0
+Domain ID = 0
+Security Protocol = None
+Drive Groups = 2
+
+TOPOLOGY :
+========
+
+-----------------------------------------------------------------------------
+DG Arr Row EID:Slot DID Type  State BT       Size PDC  PI SED DS3  FSpace TR 
+-----------------------------------------------------------------------------
+ 0 -   -   -        -   RAID5 Optl  N    7.276 TB dsbl N  N   dflt N      N  
+ 0 0   -   -        -   RAID5 Optl  N    7.276 TB dsbl N  N   dflt N      N  
+ 0 0   0   62:3     12  DRIVE Onln  N    3.637 TB dsbl N  N   dflt -      N  
+ 0 0   1   62:1     15  DRIVE Onln  N    3.637 TB dsbl N  N   dflt -      N  
+ 0 0   2   62:2     13  DRIVE Onln  N    3.637 TB dsbl N  N   dflt -      N  
+ 0 -   -   62:0     18  DRIVE DHS   -    3.637 TB -    -  -   -    -      N  
+ 1 -   -   -        -   RAID1 Optl  N  237.968 GB dsbl N  N   dflt N      N  
+ 1 0   -   -        -   RAID1 Optl  N  237.968 GB dsbl N  N   dflt N      N  
+ 1 0   0   62:4     16  DRIVE Onln  N  237.968 GB dsbl N  N   dflt -      N  
+ 1 0   1   62:5     17  DRIVE Onln  N  237.968 GB dsbl N  N   dflt -      N  
+-----------------------------------------------------------------------------
+
+DG=Disk Group Index|Arr=Array Index|Row=Row Index|EID=Enclosure Device ID
+DID=Device ID|Type=Drive Type|Onln=Online|Rbld=Rebuild|Optl=Optimal|Dgrd=Degraded
+Pdgd=Partially degraded|Offln=Offline|BT=Background Task Active
+PDC=PD Cache|PI=Protection Info|SED=Self Encrypting Drive|Frgn=Foreign
+DS3=Dimmer Switch 3|dflt=Default|Msng=Missing|FSpace=Free Space Present
+TR=Transport Ready
+
+Virtual Drives = 2
+
+VD LIST :
+=======
+
+---------------------------------------------------------------
+DG/VD TYPE  State Access Consist Cache Cac sCC       Size Name 
+---------------------------------------------------------------
+0/0   RAID5 Optl  RW     Yes     NRWTD -   OFF   7.276 TB VG1  
+1/1   RAID1 Optl  RW     Yes     NRWTD -   OFF 237.968 GB OS   
+---------------------------------------------------------------
+
+VD=Virtual Drive| DG=Drive Group|Rec=Recovery
+Cac=CacheCade|OfLn=OffLine|Pdgd=Partially Degraded|Dgrd=Degraded
+Optl=Optimal|dflt=Default|RO=Read Only|RW=Read Write|HD=Hidden|TRANS=TransportReady
+B=Blocked|Consist=Consistent|R=Read Ahead Always|NR=No Read Ahead|WB=WriteBack
+AWB=Always WriteBack|WT=WriteThrough|C=Cached IO|D=Direct IO|sCC=Scheduled
+Check Consistency
+
+Physical Drives = 6
+
+PD LIST :
+=======
+
+---------------------------------------------------------------------------------------
+EID:Slt DID State DG       Size Intf Med SED PI SeSz Model                     Sp Type 
+---------------------------------------------------------------------------------------
+62:0     18 DHS   0    3.637 TB SAS  HDD N   N  512B ST4000NM0023              D  -    
+62:1     15 Onln  0    3.637 TB SAS  HDD N   N  512B ST4000NM0023              U  -    
+62:2     13 Onln  0    3.637 TB SAS  HDD N   N  512B ST4000NM0023              U  -    
+62:3     12 Onln  0    3.637 TB SAS  HDD N   N  512B ST4000NM0023              U  -    
+62:4     16 Onln  1  237.968 GB SATA SSD N   N  512B Samsung SSD 860 PRO 256GB U  -    
+62:5     17 Onln  1  237.968 GB SATA SSD N   N  512B Samsung SSD 860 PRO 256GB U  -    
+---------------------------------------------------------------------------------------
+
+EID=Enclosure Device ID|Slt=Slot No|DID=Device ID|DG=DriveGroup
+DHS=Dedicated Hot Spare|UGood=Unconfigured Good|GHS=Global Hotspare
+UBad=Unconfigured Bad|Sntze=Sanitize|Onln=Online|Offln=Offline|Intf=Interface
+Med=Media Type|SED=Self Encryptive Drive|PI=Protection Info
+SeSz=Sector Size|Sp=Spun|U=Up|D=Down|T=Transition|F=Foreign
+UGUnsp=UGood Unsupported|UGShld=UGood shielded|HSPShld=Hotspare shielded
+CFShld=Configured shielded|Cpybck=CopyBack|CBShld=Copyback Shielded
+UBUnsp=UBad Unsupported|Rbld=Rebuild
+
+Enclosures = 1
+
+Enclosure LIST :
+==============
+
+--------------------------------------------------------------------
+EID State Slots PD PS Fans TSs Alms SIM Port# ProdID VendorSpecific 
+--------------------------------------------------------------------
+ 62 OK        8  6  0    0   0    0   1 -     SGPIO                 
+--------------------------------------------------------------------
+
+EID=Enclosure Device ID | PD=Physical drive count | PS=Power Supply count
+TSs=Temperature sensor count | Alms=Alarm count | SIM=SIM Count | ProdID=Product ID
+
+

@@ -1,0 +1,8 @@
+[Unit]
+Description=MegaRAID monthly health summary email
+Documentation=file:///usr/local/share/doc/check-megaraid/README.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/check-megaraid --monthly
+Nice=10

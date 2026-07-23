@@ -1,0 +1,15 @@
+CLI Version = 007.2309.0000.0000 Sep 16, 2022
+Operating system = Linux 6.17.4-2-pve
+Controller = 0
+Status = Success
+Description = None
+
+
+Controller Properties :
+=====================
+
+-----------------
+Ctrl_Prop Value  
+-----------------
+Alarm     ABSENT 
+-----------------

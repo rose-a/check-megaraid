@@ -1,0 +1,8 @@
+[Unit]
+Description=MegaRAID health check (alert on problems)
+Documentation=file:///usr/local/share/doc/check-megaraid/README.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/check-megaraid --check
+Nice=10

@@ -1,0 +1,313 @@
+#!/usr/bin/env bash
+# MegaRAID health check for Proxmox / storcli.
+# Default (--check): email root only when unhealthy.
+# --monthly: always email with full storcli dumps and HEALTHY/UNHEALTHY subject.
+set -euo pipefail
+
+MAIL_TO="${CHECK_MEGARAID_MAIL_TO:-root}"
+STORCLI="${CHECK_MEGARAID_STORCLI:-storcli}"
+HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname || echo unknown)"
+
+MODE="check"
+SHOW_FILE=""
+C0_FILE=""
+TEST_MAIL=0
+DRY_RUN=0
+
+usage() {
+  cat <<'EOF'
+Usage: check-megaraid [options]
+
+  --check              Interval check: mail only on problems (default)
+  --monthly            Monthly summary: always mail full dumps + verdict
+  --show-file PATH     Use fixture instead of: storcli show
+  --c0-file PATH       Use fixture instead of: storcli /c0 show
+  --test-mail          Send a test mail and exit 0
+  --dry-run            Print mail that would be sent; do not send
+  -h, --help           Show this help
+
+Environment:
+  CHECK_MEGARAID_MAIL_TO   Recipient (default: root)
+  CHECK_MEGARAID_STORCLI   storcli binary (default: storcli)
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --check) MODE="check"; shift ;;
+    --monthly) MODE="monthly"; shift ;;
+    --show-file) SHOW_FILE="${2:-}"; shift 2 ;;
+    --c0-file) C0_FILE="${2:-}"; shift 2 ;;
+    --test-mail) TEST_MAIL=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+send_mail() {
+  local subject="$1"
+  local body="$2"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '=== MAIL TO: %s ===\nSubject: %s\n\n%s\n' "$MAIL_TO" "$subject" "$body"
+    return 0
+  fi
+  if command -v mail >/dev/null 2>&1; then
+    printf '%s\n' "$body" | mail -s "$subject" "$MAIL_TO"
+  elif command -v sendmail >/dev/null 2>&1; then
+    {
+      printf 'To: %s\n' "$MAIL_TO"
+      printf 'Subject: %s\n' "$subject"
+      printf '\n'
+      printf '%s\n' "$body"
+    } | sendmail -t
+  else
+    echo "No mail or sendmail found; cannot send: $subject" >&2
+    printf '%s\n' "$body" >&2
+    return 1
+  fi
+}
+
+if [[ "$TEST_MAIL" -eq 1 ]]; then
+  send_mail "MegaRAID ${HOSTNAME_SHORT}: TEST" \
+    "Test message from check-megaraid on ${HOSTNAME_SHORT}."
+  exit 0
+fi
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+show_out="$tmpdir/show.txt"
+c0_out="$tmpdir/c0.txt"
+
+if [[ -n "$SHOW_FILE" ]]; then
+  tr -d '\r' <"$SHOW_FILE" >"$show_out"
+else
+  if ! command -v "$STORCLI" >/dev/null 2>&1; then
+    echo "storcli not found: $STORCLI" >&2
+    exit 1
+  fi
+  "$STORCLI" show | tr -d '\r' >"$show_out"
+fi
+
+if [[ -n "$C0_FILE" ]]; then
+  tr -d '\r' <"$C0_FILE" >"$c0_out"
+else
+  "$STORCLI" /c0 show | tr -d '\r' >"$c0_out"
+fi
+
+FINDINGS=()
+
+add_finding() {
+  FINDINGS+=("$1")
+}
+
+# --- parse storcli show (system overview) ---
+parse_show() {
+  local file="$1"
+  local status controllers=0
+
+  status="$(awk -F' = ' '/^Status = /{print $2; exit}' "$file" || true)"
+  if [[ -n "$status" && "$status" != "Success" ]]; then
+    add_finding "storcli show: Status=$status (expected Success)"
+  fi
+
+  controllers="$(awk -F' = ' '/^Number of Controllers = /{print $2; exit}' "$file" || true)"
+  if [[ -z "$controllers" ]] || [[ "$controllers" -lt 1 ]]; then
+    add_finding "storcli show: no controllers found"
+    return
+  fi
+
+  # Data line under System Overview:
+  # Ctl Model Ports PDs DGs DNOpt VDs VNOpt BBU sPR DS EHS ASOs Hlth
+  local line hlth dnopt vnopt
+  line="$(awk '
+    BEGIN { inov=0 }
+    /^System Overview/ { inov=1; next }
+    inov && /^----/ { next }
+    inov && /^Ctl=/ { exit }
+    inov && NF >= 14 && $1 ~ /^[0-9]+$/ {
+      print
+      exit
+    }
+  ' "$file")"
+
+  if [[ -z "$line" ]]; then
+    add_finding "storcli show: could not parse System Overview"
+    return
+  fi
+
+  # shellcheck disable=SC2086
+  set -- $line
+  dnopt="${6:-}"
+  vnopt="${8:-}"
+  hlth="${*: -1}"
+
+  if [[ "$hlth" != "Opt" ]]; then
+    add_finding "Controller Hlth=$hlth (expected Opt)"
+  fi
+  if [[ "$dnopt" != "0" ]]; then
+    add_finding "DNOpt=$dnopt (arrays not optimal)"
+  fi
+  if [[ "$vnopt" != "0" ]]; then
+    add_finding "VNOpt=$vnopt (VDs not optimal)"
+  fi
+}
+
+# --- parse storcli /c0 show ---
+parse_c0() {
+  local file="$1"
+  local status
+  local vd_count=0 pd_count=0 enc_count=0
+
+  status="$(awk -F' = ' '/^Status = /{print $2; exit}' "$file" || true)"
+  if [[ -n "$status" && "$status" != "Success" ]]; then
+    add_finding "storcli /c0 show: Status=$status (expected Success)"
+  fi
+
+  # VD LIST rows: DG/VD TYPE State ...
+  while IFS= read -r line; do
+    # shellcheck disable=SC2086
+    set -- $line
+    [[ $# -ge 3 ]] || continue
+    local dgvd="$1" typ="$2" state="$3"
+    [[ "$dgvd" =~ ^[0-9]+/[0-9]+$ ]] || continue
+    vd_count=$((vd_count + 1))
+    if [[ "$state" != "Optl" ]]; then
+      add_finding "VD $dgvd ($typ) State=$state (expected Optl)"
+    fi
+  done < <(awk '
+    BEGIN { invd=0 }
+    /^VD LIST/ { invd=1; next }
+    invd && /^----/ { next }
+    invd && /^VD=/ { exit }
+    invd && /^Physical Drives/ { exit }
+    invd && /^TOPOLOGY/ { exit }
+    invd && NF >= 3 { print }
+  ' "$file")
+
+  # PD LIST rows: EID:Slt DID State ...
+  while IFS= read -r line; do
+    # shellcheck disable=SC2086
+    set -- $line
+    [[ $# -ge 3 ]] || continue
+    local eidslt="$1" did="$2" state="$3"
+    [[ "$eidslt" =~ ^[0-9]+:[0-9]+$ ]] || continue
+    [[ "$did" =~ ^[0-9]+$ ]] || continue
+    pd_count=$((pd_count + 1))
+    case "$state" in
+      Onln|DHS|GHS) ;;
+      *)
+        add_finding "PD ${eidslt} DID=${did} State=${state}"
+        ;;
+    esac
+  done < <(awk '
+    BEGIN { inpd=0 }
+    /^PD LIST/ { inpd=1; next }
+    inpd && /^----/ { next }
+    inpd && /^EID=/ { exit }
+    inpd && /^Enclosures/ { exit }
+    inpd && NF >= 3 { print }
+  ' "$file")
+
+  # Enclosure LIST: EID State ...
+  while IFS= read -r line; do
+    # shellcheck disable=SC2086
+    set -- $line
+    [[ $# -ge 2 ]] || continue
+    local eid="$1" estate="$2"
+    [[ "$eid" =~ ^[0-9]+$ ]] || continue
+    enc_count=$((enc_count + 1))
+    if [[ "$estate" != "OK" ]]; then
+      add_finding "Enclosure EID=${eid} State=${estate} (expected OK)"
+    fi
+  done < <(awk '
+    BEGIN { ine=0 }
+    /^Enclosure LIST/ { ine=1; next }
+    ine && /^----/ { next }
+    ine && /^EID=/ { exit }
+    ine && NF >= 2 { print }
+  ' "$file")
+
+  if [[ "$vd_count" -eq 0 ]]; then
+    add_finding "storcli /c0 show: no virtual drives parsed"
+  fi
+  if [[ "$pd_count" -eq 0 ]]; then
+    add_finding "storcli /c0 show: no physical drives parsed"
+  fi
+}
+
+parse_show "$show_out"
+parse_c0 "$c0_out"
+
+verdict="HEALTHY"
+exit_code=0
+if [[ ${#FINDINGS[@]} -gt 0 ]]; then
+  verdict="UNHEALTHY"
+  exit_code=1
+fi
+
+findings_text() {
+  if [[ ${#FINDINGS[@]} -eq 0 ]]; then
+    printf 'No issues detected.\n'
+    return
+  fi
+  local f
+  for f in "${FINDINGS[@]}"; do
+    printf -- '- %s\n' "$f"
+  done
+}
+
+build_alert_body() {
+  cat <<EOF
+MegaRAID check on ${HOSTNAME_SHORT}: ${verdict}
+
+Findings:
+$(findings_text)
+
+---- storcli show (excerpt: System Overview) ----
+$(awk '
+  /^System Overview/ {p=1}
+  p {print}
+  p && /^Hlth=/ {exit}
+' "$show_out")
+
+---- storcli /c0 show (VD LIST + PD LIST) ----
+$(awk '
+  /^VD LIST/ {p=1}
+  /^Enclosures/ {if(p){print; exit}}
+  p {print}
+' "$c0_out")
+EOF
+}
+
+build_monthly_body() {
+  cat <<EOF
+MegaRAID monthly summary on ${HOSTNAME_SHORT}: ${verdict}
+
+Findings:
+$(findings_text)
+
+================================================================================
+storcli show
+================================================================================
+$(cat "$show_out")
+
+================================================================================
+storcli /c0 show
+================================================================================
+$(cat "$c0_out")
+EOF
+}
+
+case "$MODE" in
+  check)
+    if [[ "$verdict" == "UNHEALTHY" ]]; then
+      send_mail "MegaRAID ${HOSTNAME_SHORT}: ALERT" "$(build_alert_body)"
+    fi
+    ;;
+  monthly)
+    send_mail "MegaRAID ${HOSTNAME_SHORT}: ${verdict}" "$(build_monthly_body)"
+    ;;
+esac
+
+exit "$exit_code"
