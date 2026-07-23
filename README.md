@@ -29,7 +29,9 @@ Alerts are **not** sent with custom `sendmail`/MIME. The script calls Proxmox’
 
 Routing uses **Datacenter → Notifications** (matchers / sendmail or SMTP targets). Do **not** mail local `root` yourself—that path (`system-mail` / `proxmox-mail-forward`) flattens multipart and produces empty or one-line messages.
 
-This uses the internal `libpve-notify-perl` API (same approach as [community scripts](https://forum.proxmox.com/threads/hook-custom-script-into-notifications-system.162766/)). It can break on PVE package upgrades; re-test after updates.
+This uses the internal `libpve-notify-perl` API (same approach as [community scripts](https://forum.proxmox.com/threads/hook-custom-script-into-notifications-system.162766/post-838629)). It can break on PVE package upgrades; re-test after updates.
+
+`install.sh` also installs the `simple` notification templates under `/etc/pve/notification-templates/default/` (`simple-subject.txt.hbs`, `simple-body.txt.hbs`, `simple-body.html.hbs`).
 
 ## Install on PVE host
 

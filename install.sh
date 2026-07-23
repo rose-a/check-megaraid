@@ -29,6 +29,19 @@ install -m 0644 "$ROOT/systemd/check-megaraid.timer" /etc/systemd/system/
 install -m 0644 "$ROOT/systemd/check-megaraid-monthly.service" /etc/systemd/system/
 install -m 0644 "$ROOT/systemd/check-megaraid-monthly.timer" /etc/systemd/system/
 
+# PVE::Notify template type "simple" (forum recipe):
+# https://forum.proxmox.com/threads/hook-custom-script-into-notifications-system.162766/post-838629
+install -d /etc/pve/notification-templates/default
+cat >/etc/pve/notification-templates/default/simple-subject.txt.hbs <<'EOF'
+{{ title }}
+EOF
+cat >/etc/pve/notification-templates/default/simple-body.txt.hbs <<'EOF'
+{{ message }}
+EOF
+cat >/etc/pve/notification-templates/default/simple-body.html.hbs <<'EOF'
+<pre>{{ message }}</pre>
+EOF
+
 systemctl daemon-reload
 systemctl enable --now check-megaraid.timer
 systemctl enable --now check-megaraid-monthly.timer
