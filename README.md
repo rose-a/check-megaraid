@@ -25,6 +25,8 @@ Unhealthy examples: PD `UBad` (even if VDs stay Optimal after spare takeover), r
 
 Mail goes to `root` by default (Proxmox forwards root@pam). Override with `CHECK_MEGARAID_MAIL_TO`.
 
+Messages are sent via `sendmail` as `multipart/alternative` (plain text + HTML `<pre>`) so line breaks survive in Nextcloud Mail and desktop MUAs.
+
 ## Install on PVE host
 
 ```bash

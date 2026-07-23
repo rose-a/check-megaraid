@@ -45,24 +45,58 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+html_escape() {
+  sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
+}
+
+# Emit stdin with CRLF line endings (RFC 5322).
+to_crlf() {
+  sed 's/\r$//' | awk '{ printf "%s\r\n", $0 }'
+}
+
 send_mail() {
   local subject="$1"
   local body="$2"
+  local boundary html_body
+  boundary="check-megaraid-$(date +%s)-$$"
+
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '=== MAIL TO: %s ===\nSubject: %s\n\n%s\n' "$MAIL_TO" "$subject" "$body"
     return 0
   fi
-  if command -v mail >/dev/null 2>&1; then
-    printf '%s\n' "$body" | mail -s "$subject" "$MAIL_TO"
-  elif command -v sendmail >/dev/null 2>&1; then
+
+  html_body="$(printf '%s' "$body" | html_escape)"
+
+  # Prefer sendmail so we control MIME. Plain text alone is often collapsed to a
+  # single line by Nextcloud Mail / some MUAs; include a <pre> HTML alternative.
+  if command -v sendmail >/dev/null 2>&1; then
     {
-      printf 'To: %s\n' "$MAIL_TO"
-      printf 'Subject: %s\n' "$subject"
-      printf '\n'
-      printf '%s\n' "$body"
-    } | sendmail -t
+      printf 'To: %s\r\n' "$MAIL_TO"
+      printf 'Subject: %s\r\n' "$subject"
+      printf 'MIME-Version: 1.0\r\n'
+      printf 'Content-Type: multipart/alternative; boundary="%s"\r\n' "$boundary"
+      printf '\r\n'
+      printf '--%s\r\n' "$boundary"
+      printf 'Content-Type: text/plain; charset=UTF-8\r\n'
+      printf 'Content-Transfer-Encoding: 8bit\r\n'
+      printf '\r\n'
+      printf '%s' "$body" | to_crlf
+      printf '\r\n'
+      printf '--%s\r\n' "$boundary"
+      printf 'Content-Type: text/html; charset=UTF-8\r\n'
+      printf 'Content-Transfer-Encoding: 8bit\r\n'
+      printf '\r\n'
+      printf '<!DOCTYPE html><html><body>\r\n'
+      printf '<pre style="font-family: ui-monospace, Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">\r\n'
+      printf '%s' "$html_body" | to_crlf
+      printf '</pre>\r\n'
+      printf '</body></html>\r\n'
+      printf '--%s--\r\n' "$boundary"
+    } | sendmail -t -oi
+  elif command -v mail >/dev/null 2>&1; then
+    printf '%s' "$body" | to_crlf | mail -s "$subject" "$MAIL_TO"
   else
-    echo "No mail or sendmail found; cannot send: $subject" >&2
+    echo "No sendmail or mail found; cannot send: $subject" >&2
     printf '%s\n' "$body" >&2
     return 1
   fi
