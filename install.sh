@@ -12,6 +12,10 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! perl -MPVE::Notify -e '1' 2>/dev/null; then
+  echo "WARNING: PVE::Notify not loadable (need Proxmox VE / libpve-notify-perl)" >&2
+fi
+
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 install -d /usr/local/sbin
@@ -36,8 +40,9 @@ fi
 echo "Installed. Timers:"
 systemctl list-timers 'check-megaraid*' --no-pager || true
 echo
+echo "Notifications go through Datacenter → Notifications (PVE::Notify)."
 echo "Next steps:"
 echo "  1. systemctl disable --now smartd   # or smartmontools.service"
 echo "  2. /usr/local/sbin/check-megaraid --check"
 echo "  3. /usr/local/sbin/check-megaraid --monthly --dry-run"
-echo "  4. /usr/local/sbin/check-megaraid --test-mail"
+echo "  4. /usr/local/sbin/check-megaraid --test"

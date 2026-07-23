@@ -1,32 +1,45 @@
 #!/usr/bin/env python3
 """MegaRAID health check for Proxmox / storcli.
 
-Default (--check): email root only when unhealthy.
---monthly: always email with full storcli dumps and HEALTHY/UNHEALTHY subject.
+Default (--check): notify only when unhealthy.
+--monthly: always notify with full storcli dumps and HEALTHY/UNHEALTHY title.
 
-Mail matches Proxmox style: multipart/alternative + quoted-printable +
-plain text and <html><body><pre>...</pre></body></html>.
+Delivery uses Proxmox VE's notification system (PVE::Notify, template type
+"simple") so mail is built like other PVE/PBS notifications.
 """
 
 from __future__ import annotations
 
 import argparse
-import html
 import os
 import re
-import shutil
 import socket
 import subprocess
 import sys
-from email import charset as charset_mod
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 
-# Prefer quoted-printable like Proxmox notification mails.
-charset_mod.add_charset("utf-8", charset_mod.QP, charset_mod.QP, "utf-8")
-
 OK_PD_STATES = frozenset({"Onln", "DHS", "GHS"})
+
+# Unsupported but common hook into libpve-notify-perl (see PVE forum).
+PVE_NOTIFY_PERL = r"""
+use strict;
+use warnings;
+use PVE::Notify;
+
+my $sev = $ENV{LEVEL} // die "LEVEL missing\n";
+my $title = $ENV{TITLE} // "";
+my $message = $ENV{MESSAGE} // "";
+
+my $common = eval { PVE::Notify::common_template_data() } // {};
+my $data = {
+    %$common,
+    title   => $title,
+    message => $message,
+};
+my $fields = { origin => "check-megaraid" };
+
+PVE::Notify::notify($sev, "simple", $data, $fields);
+"""
 
 
 def hostname_short() -> str:
@@ -233,45 +246,43 @@ def build_monthly_body(host: str, verdict: str, findings: list[str], show: str, 
     )
 
 
-def build_message(mail_to: str, subject: str, body: str) -> MIMEMultipart:
-    """Proxmox-style multipart/alternative with quoted-printable parts."""
-    msg = MIMEMultipart("alternative")
-    msg["To"] = mail_to
-    msg["Subject"] = subject
-    msg["Auto-Submitted"] = "auto-generated"
-
-    plain = MIMEText(body, "plain", "utf-8")
-    html_body = "<html><body><pre>" + html.escape(body) + "</pre></body></html>"
-    html_part = MIMEText(html_body, "html", "utf-8")
-    msg.attach(plain)
-    msg.attach(html_part)
-    return msg
-
-
-def send_mail(mail_to: str, subject: str, body: str, *, dry_run: bool) -> None:
+def pve_notify(level: str, title: str, message: str, *, dry_run: bool) -> None:
+    """Raise a PVE notification (template type 'simple')."""
     if dry_run:
-        print(f"=== MAIL TO: {mail_to} ===")
-        print(f"Subject: {subject}")
+        print(f"=== PVE NOTIFY ===")
+        print(f"Severity: {level}")
+        print(f"Title: {title}")
         print()
-        print(body)
+        print(message)
         return
 
-    msg = build_message(mail_to, subject, body)
-    raw = msg.as_bytes()
+    env = os.environ.copy()
+    env["LEVEL"] = level
+    env["TITLE"] = title
+    env["MESSAGE"] = message
 
-    sendmail = shutil.which("sendmail")
-    if not sendmail:
-        raise SystemExit("sendmail not found; cannot send mail")
+    try:
+        proc = subprocess.run(
+            ["perl", "-MPVE::Notify", "-e", PVE_NOTIFY_PERL],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(
+            "perl not found; check-megaraid must run on Proxmox VE"
+        ) from exc
 
-    proc = subprocess.run(
-        [sendmail, "-t", "-oi"],
-        input=raw,
-        check=False,
-        capture_output=True,
-    )
     if proc.returncode != 0:
-        err = (proc.stderr or b"").decode("utf-8", errors="replace")
-        raise SystemExit(f"sendmail failed ({proc.returncode}): {err}")
+        err = (proc.stderr or proc.stdout or "").strip()
+        if "PVE/Notify" in err or "Can't locate PVE/Notify.pm" in err:
+            raise SystemExit(
+                "PVE::Notify not available (install/run on Proxmox VE with "
+                f"libpve-notify-perl). Details: {err}"
+            )
+        raise SystemExit(f"PVE::Notify failed ({proc.returncode}): {err}")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -282,36 +293,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_const",
         const="check",
         dest="mode",
-        help="interval check: mail only on problems (default)",
+        help="interval check: notify only on problems (default)",
     )
     mode.add_argument(
         "--monthly",
         action="store_const",
         const="monthly",
         dest="mode",
-        help="monthly summary: always mail full dumps + verdict",
+        help="monthly summary: always notify with full dumps + verdict",
     )
     p.set_defaults(mode="check")
     p.add_argument("--show-file", type=Path, help="fixture instead of: storcli show")
     p.add_argument("--c0-file", type=Path, help="fixture instead of: storcli /c0 show")
-    p.add_argument("--test-mail", action="store_true", help="send a test mail and exit")
+    p.add_argument(
+        "--test",
+        action="store_true",
+        help="send a test PVE notification and exit",
+    )
     p.add_argument(
         "--dry-run",
         action="store_true",
-        help="print mail that would be sent; do not send",
+        help="print notification that would be sent; do not notify",
     )
     return p.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    mail_to = os.environ.get("CHECK_MEGARAID_MAIL_TO", "root")
     storcli = os.environ.get("CHECK_MEGARAID_STORCLI", "storcli")
     host = hostname_short()
 
-    if args.test_mail:
-        send_mail(
-            mail_to,
+    if args.test:
+        pve_notify(
+            "info",
             f"MegaRAID {host}: TEST",
             f"Test message from check-megaraid on {host}.\n",
             dry_run=args.dry_run,
@@ -330,15 +344,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.mode == "check":
         if not healthy:
-            send_mail(
-                mail_to,
+            pve_notify(
+                "error",
                 f"MegaRAID {host}: ALERT",
                 build_alert_body(host, verdict, findings, show, c0),
                 dry_run=args.dry_run,
             )
     elif args.mode == "monthly":
-        send_mail(
-            mail_to,
+        pve_notify(
+            "info" if healthy else "error",
             f"MegaRAID {host}: {verdict}",
             build_monthly_body(host, verdict, findings, show, c0),
             dry_run=args.dry_run,

@@ -4,10 +4,10 @@ Python 3 MegaRAID monitor for Proxmox VE. Replaces noisy `smartd` emails on Mega
 
 ## What it does
 
-| Mode | When | Mail |
-|------|------|------|
-| `--check` (default) | every 15 minutes via systemd | only if unhealthy (`MegaRAID HOST: ALERT`) |
-| `--monthly` | 1st of month ~09:00 | always, full dumps (`MegaRAID HOST: HEALTHY` or `UNHEALTHY`) |
+| Mode | When | Notification |
+|------|------|----------------|
+| `--check` (default) | every 15 minutes via systemd | only if unhealthy (severity `error`, title `MegaRAID HOST: ALERT`) |
+| `--monthly` | 1st of month ~09:00 | always: `HEALTHY` (`info`) or `UNHEALTHY` (`error`) with full storcli dumps |
 
 Commands used:
 
@@ -23,9 +23,13 @@ Healthy when:
 
 Unhealthy examples: PD `UBad` (even if VDs stay Optimal after spare takeover), rebuild/`Rbld`, degraded VD, non-`Opt` controller health.
 
-Mail goes to `root` by default (Proxmox forwards root@pam). Override with `CHECK_MEGARAID_MAIL_TO`.
+## Delivery (PVE notifications)
 
-Messages are built with Python’s `email` library and sent via `sendmail`, matching Proxmox notification style: `multipart/alternative`, `quoted-printable`, plain text plus `<html><body><pre>…</pre></body></html>`.
+Alerts are **not** sent with custom `sendmail`/MIME. The script calls Proxmox’s notification stack (`PVE::Notify::notify`, template type `simple`) so mail looks like other PVE/PBS notices.
+
+Routing uses **Datacenter → Notifications** (matchers / sendmail or SMTP targets). Do **not** mail local `root` yourself—that path (`system-mail` / `proxmox-mail-forward`) flattens multipart and produces empty or one-line messages.
+
+This uses the internal `libpve-notify-perl` API (same approach as [community scripts](https://forum.proxmox.com/threads/hook-custom-script-into-notifications-system.162766/)). It can break on PVE package upgrades; re-test after updates.
 
 ## Install on PVE host
 
@@ -35,11 +39,11 @@ chmod +x check-megaraid install.sh
 ./install.sh
 ```
 
-Requires `python3` and `storcli` on PATH (on pve1: `/usr/bin/storcli` → `/opt/MegaRAID/storcli/storcli64`).
+Requires `python3`, `perl`, `PVE::Notify` (Proxmox VE), and `storcli` on PATH.
 
 ### Disable smartd monitoring
 
-If there are no non-RAID disks on this host, put this in `/etc/smartd.conf` so it monitors nothing:
+If there are no non-RAID disks, in `/etc/smartd.conf`:
 
 ```text
 DEVICESCAN -d ignore
@@ -52,27 +56,24 @@ Do **not** monitor `/dev/bus/0` / `megaraid_disk_*` with smartd.
 ```bash
 /usr/local/sbin/check-megaraid --check
 /usr/local/sbin/check-megaraid --monthly --dry-run
-/usr/local/sbin/check-megaraid --test-mail
+/usr/local/sbin/check-megaraid --test
 systemctl list-timers 'check-megaraid*'
 ```
 
-### Offline fixture test (no controller needed)
+Confirm the test notification arrives as a normal Proxmox-style email (readable plain + HTML).
+
+### Offline fixture test (no controller / no notify)
 
 ```bash
 ./check-megaraid --check --dry-run \
   --show-file storcli-samples/show.txt \
   --c0-file storcli-samples/c0-healty.txt
-# expect exit 0, no mail
+# expect exit 0, no notify
 
 ./check-megaraid --check --dry-run \
   --show-file storcli-samples/show.txt \
   --c0-file storcli-samples/bad-disk-hotspare-took-over.txt
-# expect exit 1 and ALERT mentioning PD ... State=UBad
-
-./check-megaraid --monthly --dry-run \
-  --show-file storcli-samples/show.txt \
-  --c0-file storcli-samples/c0-healty.txt
-# expect HEALTHY subject and full command output in body
+# expect exit 1 and dry-run ALERT with State=UBad
 ```
 
 ## Why not `storcli /c0 show alarm`?
