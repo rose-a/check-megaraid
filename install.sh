@@ -7,6 +7,11 @@ if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
   exit 1
 fi
 
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required" >&2
+  exit 1
+fi
+
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 install -d /usr/local/sbin

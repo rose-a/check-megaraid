@@ -1,6 +1,6 @@
 # check-megaraid
 
-Storcli-based MegaRAID monitoring for Proxmox VE. Replaces noisy `smartd` emails on MegaRAID hot spares (SMART passthrough often fails on spun-down DHS/GHS) with real controller/array/disk checks.
+Python 3 MegaRAID monitor for Proxmox VE. Replaces noisy `smartd` emails on MegaRAID hot spares (SMART passthrough often fails on spun-down DHS/GHS) with real controller/array/disk checks.
 
 ## What it does
 
@@ -25,18 +25,17 @@ Unhealthy examples: PD `UBad` (even if VDs stay Optimal after spare takeover), r
 
 Mail goes to `root` by default (Proxmox forwards root@pam). Override with `CHECK_MEGARAID_MAIL_TO`.
 
-Messages are sent via `sendmail` as `multipart/alternative` (plain text + HTML `<pre>`) so line breaks survive in Nextcloud Mail and desktop MUAs.
+Messages are built with Python’s `email` library and sent via `sendmail`, matching Proxmox notification style: `multipart/alternative`, `quoted-printable`, plain text plus `<html><body><pre>…</pre></body></html>`.
 
 ## Install on PVE host
 
 ```bash
-# copy this directory to the host, then:
 cd check-megaraid
 chmod +x check-megaraid install.sh
 ./install.sh
 ```
 
-Requires `storcli` on PATH (on pve1: `/usr/bin/storcli` → `/opt/MegaRAID/storcli/storcli64`).
+Requires `python3` and `storcli` on PATH (on pve1: `/usr/bin/storcli` → `/opt/MegaRAID/storcli/storcli64`).
 
 ### Disable smartd monitoring
 
@@ -51,21 +50,13 @@ Do **not** monitor `/dev/bus/0` / `megaraid_disk_*` with smartd.
 ### Verify
 
 ```bash
-# silent exit 0 when healthy
 /usr/local/sbin/check-megaraid --check
-
-# preview monthly mail
 /usr/local/sbin/check-megaraid --monthly --dry-run
-
-# real test mail through Proxmox mail setup
 /usr/local/sbin/check-megaraid --test-mail
-
 systemctl list-timers 'check-megaraid*'
 ```
 
 ### Offline fixture test (no controller needed)
-
-From this repo:
 
 ```bash
 ./check-megaraid --check --dry-run \
@@ -76,7 +67,7 @@ From this repo:
 ./check-megaraid --check --dry-run \
   --show-file storcli-samples/show.txt \
   --c0-file storcli-samples/bad-disk-hotspare-took-over.txt
-# expect exit 1 and ALERT mail dump mentioning PD ... State=UBad
+# expect exit 1 and ALERT mentioning PD ... State=UBad
 
 ./check-megaraid --monthly --dry-run \
   --show-file storcli-samples/show.txt \
@@ -91,7 +82,7 @@ That property is only the physical buzzer (`on`/`off`/`silence`/`ABSENT`). On CP
 ## Layout
 
 ```text
-check-megaraid          # main script
+check-megaraid          # Python 3 script
 install.sh              # install + enable timers
 systemd/                # .service / .timer units
 storcli-samples/        # captured outputs for parser tests

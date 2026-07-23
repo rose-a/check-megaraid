@@ -1,347 +1,351 @@
-#!/usr/bin/env bash
-# MegaRAID health check for Proxmox / storcli.
-# Default (--check): email root only when unhealthy.
-# --monthly: always email with full storcli dumps and HEALTHY/UNHEALTHY subject.
-set -euo pipefail
+#!/usr/bin/env python3
+"""MegaRAID health check for Proxmox / storcli.
 
-MAIL_TO="${CHECK_MEGARAID_MAIL_TO:-root}"
-STORCLI="${CHECK_MEGARAID_STORCLI:-storcli}"
-HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname || echo unknown)"
+Default (--check): email root only when unhealthy.
+--monthly: always email with full storcli dumps and HEALTHY/UNHEALTHY subject.
 
-MODE="check"
-SHOW_FILE=""
-C0_FILE=""
-TEST_MAIL=0
-DRY_RUN=0
+Mail matches Proxmox style: multipart/alternative + quoted-printable +
+plain text and <html><body><pre>...</pre></body></html>.
+"""
 
-usage() {
-  cat <<'EOF'
-Usage: check-megaraid [options]
+from __future__ import annotations
 
-  --check              Interval check: mail only on problems (default)
-  --monthly            Monthly summary: always mail full dumps + verdict
-  --show-file PATH     Use fixture instead of: storcli show
-  --c0-file PATH       Use fixture instead of: storcli /c0 show
-  --test-mail          Send a test mail and exit 0
-  --dry-run            Print mail that would be sent; do not send
-  -h, --help           Show this help
+import argparse
+import html
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+from email import charset as charset_mod
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from pathlib import Path
 
-Environment:
-  CHECK_MEGARAID_MAIL_TO   Recipient (default: root)
-  CHECK_MEGARAID_STORCLI   storcli binary (default: storcli)
-EOF
-}
+# Prefer quoted-printable like Proxmox notification mails.
+charset_mod.add_charset("utf-8", charset_mod.QP, charset_mod.QP, "utf-8")
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --check) MODE="check"; shift ;;
-    --monthly) MODE="monthly"; shift ;;
-    --show-file) SHOW_FILE="${2:-}"; shift 2 ;;
-    --c0-file) C0_FILE="${2:-}"; shift 2 ;;
-    --test-mail) TEST_MAIL=1; shift ;;
-    --dry-run) DRY_RUN=1; shift ;;
-    -h|--help) usage; exit 0 ;;
-    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
-  esac
-done
+OK_PD_STATES = frozenset({"Onln", "DHS", "GHS"})
 
-html_escape() {
-  sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
-}
 
-# Emit stdin with CRLF line endings (RFC 5322).
-to_crlf() {
-  sed 's/\r$//' | awk '{ printf "%s\r\n", $0 }'
-}
+def hostname_short() -> str:
+    try:
+        return socket.gethostname().split(".", 1)[0] or "unknown"
+    except OSError:
+        return "unknown"
 
-send_mail() {
-  local subject="$1"
-  local body="$2"
-  local boundary html_body
-  boundary="check-megaraid-$(date +%s)-$$"
 
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf '=== MAIL TO: %s ===\nSubject: %s\n\n%s\n' "$MAIL_TO" "$subject" "$body"
-    return 0
-  fi
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace").replace("\r", "")
 
-  html_body="$(printf '%s' "$body" | html_escape)"
 
-  # Prefer sendmail so we control MIME. Plain text alone is often collapsed to a
-  # single line by Nextcloud Mail / some MUAs; include a <pre> HTML alternative.
-  if command -v sendmail >/dev/null 2>&1; then
-    {
-      printf 'To: %s\r\n' "$MAIL_TO"
-      printf 'Subject: %s\r\n' "$subject"
-      printf 'MIME-Version: 1.0\r\n'
-      printf 'Content-Type: multipart/alternative; boundary="%s"\r\n' "$boundary"
-      printf '\r\n'
-      printf -- '--%s\r\n' "$boundary"
-      printf 'Content-Type: text/plain; charset=UTF-8\r\n'
-      printf 'Content-Transfer-Encoding: 8bit\r\n'
-      printf '\r\n'
-      printf '%s' "$body" | to_crlf
-      printf '\r\n'
-      printf -- '--%s\r\n' "$boundary"
-      printf 'Content-Type: text/html; charset=UTF-8\r\n'
-      printf 'Content-Transfer-Encoding: 8bit\r\n'
-      printf '\r\n'
-      printf '<!DOCTYPE html><html><body>\r\n'
-      printf '<pre style="font-family: ui-monospace, Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">\r\n'
-      printf '%s' "$html_body" | to_crlf
-      printf '</pre>\r\n'
-      printf '</body></html>\r\n'
-      printf -- '--%s--\r\n' "$boundary"
-    } | sendmail -t -oi
-  elif command -v mail >/dev/null 2>&1; then
-    printf '%s' "$body" | to_crlf | mail -s "$subject" "$MAIL_TO"
-  else
-    echo "No sendmail or mail found; cannot send: $subject" >&2
-    printf '%s\n' "$body" >&2
-    return 1
-  fi
-}
+def run_storcli(storcli: str, *args: str) -> str:
+    try:
+        proc = subprocess.run(
+            [storcli, *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(f"storcli not found: {storcli}") from exc
+    return (proc.stdout or "").replace("\r", "")
 
-if [[ "$TEST_MAIL" -eq 1 ]]; then
-  send_mail "MegaRAID ${HOSTNAME_SHORT}: TEST" \
-    "Test message from check-megaraid on ${HOSTNAME_SHORT}."
-  exit 0
-fi
 
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
-show_out="$tmpdir/show.txt"
-c0_out="$tmpdir/c0.txt"
+def load_show(storcli: str, show_file: Path | None) -> str:
+    if show_file is not None:
+        return read_text(show_file)
+    return run_storcli(storcli, "show")
 
-if [[ -n "$SHOW_FILE" ]]; then
-  tr -d '\r' <"$SHOW_FILE" >"$show_out"
-else
-  if ! command -v "$STORCLI" >/dev/null 2>&1; then
-    echo "storcli not found: $STORCLI" >&2
-    exit 1
-  fi
-  "$STORCLI" show | tr -d '\r' >"$show_out"
-fi
 
-if [[ -n "$C0_FILE" ]]; then
-  tr -d '\r' <"$C0_FILE" >"$c0_out"
-else
-  "$STORCLI" /c0 show | tr -d '\r' >"$c0_out"
-fi
+def load_c0(storcli: str, c0_file: Path | None) -> str:
+    if c0_file is not None:
+        return read_text(c0_file)
+    return run_storcli(storcli, "/c0", "show")
 
-FINDINGS=()
 
-add_finding() {
-  FINDINGS+=("$1")
-}
+def field_after_eq(text: str, key: str) -> str | None:
+    for line in text.splitlines():
+        if line.startswith(f"{key} = "):
+            return line.split(" = ", 1)[1].strip()
+    return None
 
-# --- parse storcli show (system overview) ---
-parse_show() {
-  local file="$1"
-  local status controllers=0
 
-  status="$(awk -F' = ' '/^Status = /{print $2; exit}' "$file" || true)"
-  if [[ -n "$status" && "$status" != "Success" ]]; then
-    add_finding "storcli show: Status=$status (expected Success)"
-  fi
+def section_lines(text: str, start: str, stop_prefixes: tuple[str, ...]) -> list[str]:
+    lines = text.splitlines()
+    out: list[str] = []
+    active = False
+    for line in lines:
+        if not active:
+            if line.startswith(start):
+                active = True
+            continue
+        if any(line.startswith(p) for p in stop_prefixes):
+            break
+        if line.startswith("----") or not line.strip():
+            continue
+        out.append(line)
+    return out
 
-  controllers="$(awk -F' = ' '/^Number of Controllers = /{print $2; exit}' "$file" || true)"
-  if [[ -z "$controllers" ]] || [[ "$controllers" -lt 1 ]]; then
-    add_finding "storcli show: no controllers found"
-    return
-  fi
 
-  # Data line under System Overview:
-  # Ctl Model Ports PDs DGs DNOpt VDs VNOpt BBU sPR DS EHS ASOs Hlth
-  local line hlth dnopt vnopt
-  line="$(awk '
-    BEGIN { inov=0 }
-    /^System Overview/ { inov=1; next }
-    inov && /^----/ { next }
-    inov && /^Ctl=/ { exit }
-    inov && NF >= 14 && $1 ~ /^[0-9]+$/ {
-      print
-      exit
-    }
-  ' "$file")"
+def parse_show(text: str, findings: list[str]) -> None:
+    status = field_after_eq(text, "Status")
+    if status and status != "Success":
+        findings.append(f"storcli show: Status={status} (expected Success)")
 
-  if [[ -z "$line" ]]; then
-    add_finding "storcli show: could not parse System Overview"
-    return
-  fi
+    controllers = field_after_eq(text, "Number of Controllers")
+    try:
+        nctl = int(controllers) if controllers is not None else 0
+    except ValueError:
+        nctl = 0
+    if nctl < 1:
+        findings.append("storcli show: no controllers found")
+        return
 
-  # shellcheck disable=SC2086
-  set -- $line
-  dnopt="${6:-}"
-  vnopt="${8:-}"
-  hlth="${*: -1}"
+    # Ctl Model Ports PDs DGs DNOpt VDs VNOpt BBU sPR DS EHS ASOs Hlth
+    overview_line = None
+    for line in section_lines(text, "System Overview", ("Ctl=",)):
+        parts = line.split()
+        if len(parts) >= 14 and parts[0].isdigit():
+            overview_line = parts
+            break
 
-  if [[ "$hlth" != "Opt" ]]; then
-    add_finding "Controller Hlth=$hlth (expected Opt)"
-  fi
-  if [[ "$dnopt" != "0" ]]; then
-    add_finding "DNOpt=$dnopt (arrays not optimal)"
-  fi
-  if [[ "$vnopt" != "0" ]]; then
-    add_finding "VNOpt=$vnopt (VDs not optimal)"
-  fi
-}
+    if overview_line is None:
+        findings.append("storcli show: could not parse System Overview")
+        return
 
-# --- parse storcli /c0 show ---
-parse_c0() {
-  local file="$1"
-  local status
-  local vd_count=0 pd_count=0 enc_count=0
+    dnopt = overview_line[5]
+    vnopt = overview_line[7]
+    hlth = overview_line[-1]
 
-  status="$(awk -F' = ' '/^Status = /{print $2; exit}' "$file" || true)"
-  if [[ -n "$status" && "$status" != "Success" ]]; then
-    add_finding "storcli /c0 show: Status=$status (expected Success)"
-  fi
+    if hlth != "Opt":
+        findings.append(f"Controller Hlth={hlth} (expected Opt)")
+    if dnopt != "0":
+        findings.append(f"DNOpt={dnopt} (arrays not optimal)")
+    if vnopt != "0":
+        findings.append(f"VNOpt={vnopt} (VDs not optimal)")
 
-  # VD LIST rows: DG/VD TYPE State ...
-  while IFS= read -r line; do
-    # shellcheck disable=SC2086
-    set -- $line
-    [[ $# -ge 3 ]] || continue
-    local dgvd="$1" typ="$2" state="$3"
-    [[ "$dgvd" =~ ^[0-9]+/[0-9]+$ ]] || continue
-    vd_count=$((vd_count + 1))
-    if [[ "$state" != "Optl" ]]; then
-      add_finding "VD $dgvd ($typ) State=$state (expected Optl)"
-    fi
-  done < <(awk '
-    BEGIN { invd=0 }
-    /^VD LIST/ { invd=1; next }
-    invd && /^----/ { next }
-    invd && /^VD=/ { exit }
-    invd && /^Physical Drives/ { exit }
-    invd && /^TOPOLOGY/ { exit }
-    invd && NF >= 3 { print }
-  ' "$file")
 
-  # PD LIST rows: EID:Slt DID State ...
-  while IFS= read -r line; do
-    # shellcheck disable=SC2086
-    set -- $line
-    [[ $# -ge 3 ]] || continue
-    local eidslt="$1" did="$2" state="$3"
-    [[ "$eidslt" =~ ^[0-9]+:[0-9]+$ ]] || continue
-    [[ "$did" =~ ^[0-9]+$ ]] || continue
-    pd_count=$((pd_count + 1))
-    case "$state" in
-      Onln|DHS|GHS) ;;
-      *)
-        add_finding "PD ${eidslt} DID=${did} State=${state}"
-        ;;
-    esac
-  done < <(awk '
-    BEGIN { inpd=0 }
-    /^PD LIST/ { inpd=1; next }
-    inpd && /^----/ { next }
-    inpd && /^EID=/ { exit }
-    inpd && /^Enclosures/ { exit }
-    inpd && NF >= 3 { print }
-  ' "$file")
+def parse_c0(text: str, findings: list[str]) -> None:
+    status = field_after_eq(text, "Status")
+    if status and status != "Success":
+        findings.append(f"storcli /c0 show: Status={status} (expected Success)")
 
-  # Enclosure LIST: EID State ...
-  while IFS= read -r line; do
-    # shellcheck disable=SC2086
-    set -- $line
-    [[ $# -ge 2 ]] || continue
-    local eid="$1" estate="$2"
-    [[ "$eid" =~ ^[0-9]+$ ]] || continue
-    enc_count=$((enc_count + 1))
-    if [[ "$estate" != "OK" ]]; then
-      add_finding "Enclosure EID=${eid} State=${estate} (expected OK)"
-    fi
-  done < <(awk '
-    BEGIN { ine=0 }
-    /^Enclosure LIST/ { ine=1; next }
-    ine && /^----/ { next }
-    ine && /^EID=/ { exit }
-    ine && NF >= 2 { print }
-  ' "$file")
+    vd_count = 0
+    for line in section_lines(
+        text, "VD LIST", ("VD=", "Physical Drives", "TOPOLOGY", "PD LIST", "Enclosures")
+    ):
+        parts = line.split()
+        if len(parts) < 3 or not re.fullmatch(r"\d+/\d+", parts[0]):
+            continue
+        vd_count += 1
+        dgvd, typ, state = parts[0], parts[1], parts[2]
+        if state != "Optl":
+            findings.append(f"VD {dgvd} ({typ}) State={state} (expected Optl)")
 
-  if [[ "$vd_count" -eq 0 ]]; then
-    add_finding "storcli /c0 show: no virtual drives parsed"
-  fi
-  if [[ "$pd_count" -eq 0 ]]; then
-    add_finding "storcli /c0 show: no physical drives parsed"
-  fi
-}
+    pd_count = 0
+    for line in section_lines(
+        text, "PD LIST", ("EID=", "Enclosures", "Enclosure LIST")
+    ):
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        eidslt, did, state = parts[0], parts[1], parts[2]
+        if not re.fullmatch(r"\d+:\d+", eidslt) or not did.isdigit():
+            continue
+        pd_count += 1
+        if state not in OK_PD_STATES:
+            findings.append(f"PD {eidslt} DID={did} State={state}")
 
-parse_show "$show_out"
-parse_c0 "$c0_out"
+    for line in section_lines(text, "Enclosure LIST", ("EID=",)):
+        parts = line.split()
+        if len(parts) < 2 or not parts[0].isdigit():
+            continue
+        eid, estate = parts[0], parts[1]
+        if estate != "OK":
+            findings.append(f"Enclosure EID={eid} State={estate} (expected OK)")
 
-verdict="HEALTHY"
-exit_code=0
-if [[ ${#FINDINGS[@]} -gt 0 ]]; then
-  verdict="UNHEALTHY"
-  exit_code=1
-fi
+    if vd_count == 0:
+        findings.append("storcli /c0 show: no virtual drives parsed")
+    if pd_count == 0:
+        findings.append("storcli /c0 show: no physical drives parsed")
 
-findings_text() {
-  if [[ ${#FINDINGS[@]} -eq 0 ]]; then
-    printf 'No issues detected.\n'
-    return
-  fi
-  local f
-  for f in "${FINDINGS[@]}"; do
-    printf -- '- %s\n' "$f"
-  done
-}
 
-build_alert_body() {
-  cat <<EOF
-MegaRAID check on ${HOSTNAME_SHORT}: ${verdict}
+def findings_text(findings: list[str]) -> str:
+    if not findings:
+        return "No issues detected."
+    return "\n".join(f"- {f}" for f in findings)
 
-Findings:
-$(findings_text)
 
----- storcli show (excerpt: System Overview) ----
-$(awk '
-  /^System Overview/ {p=1}
-  p {print}
-  p && /^Hlth=/ {exit}
-' "$show_out")
+def excerpt_show(text: str) -> str:
+    lines = text.splitlines()
+    out: list[str] = []
+    active = False
+    for line in lines:
+        if line.startswith("System Overview"):
+            active = True
+        if active:
+            out.append(line)
+            if line.startswith("Hlth="):
+                break
+    return "\n".join(out)
 
----- storcli /c0 show (VD LIST + PD LIST) ----
-$(awk '
-  /^VD LIST/ {p=1}
-  /^Enclosures/ {if(p){print; exit}}
-  p {print}
-' "$c0_out")
-EOF
-}
 
-build_monthly_body() {
-  cat <<EOF
-MegaRAID monthly summary on ${HOSTNAME_SHORT}: ${verdict}
+def excerpt_c0(text: str) -> str:
+    lines = text.splitlines()
+    out: list[str] = []
+    active = False
+    for line in lines:
+        if line.startswith("VD LIST"):
+            active = True
+        if active:
+            out.append(line)
+            if line.startswith("Enclosures"):
+                break
+    return "\n".join(out)
 
-Findings:
-$(findings_text)
 
-================================================================================
-storcli show
-================================================================================
-$(cat "$show_out")
+def build_alert_body(host: str, verdict: str, findings: list[str], show: str, c0: str) -> str:
+    return (
+        f"MegaRAID check on {host}: {verdict}\n\n"
+        f"Findings:\n{findings_text(findings)}\n\n"
+        f"---- storcli show (excerpt: System Overview) ----\n"
+        f"{excerpt_show(show)}\n\n"
+        f"---- storcli /c0 show (VD LIST + PD LIST) ----\n"
+        f"{excerpt_c0(c0)}\n"
+    )
 
-================================================================================
-storcli /c0 show
-================================================================================
-$(cat "$c0_out")
-EOF
-}
 
-case "$MODE" in
-  check)
-    if [[ "$verdict" == "UNHEALTHY" ]]; then
-      send_mail "MegaRAID ${HOSTNAME_SHORT}: ALERT" "$(build_alert_body)"
-    fi
-    ;;
-  monthly)
-    send_mail "MegaRAID ${HOSTNAME_SHORT}: ${verdict}" "$(build_monthly_body)"
-    ;;
-esac
+def build_monthly_body(host: str, verdict: str, findings: list[str], show: str, c0: str) -> str:
+    return (
+        f"MegaRAID monthly summary on {host}: {verdict}\n\n"
+        f"Findings:\n{findings_text(findings)}\n\n"
+        f"{'=' * 80}\n"
+        f"storcli show\n"
+        f"{'=' * 80}\n"
+        f"{show.rstrip()}\n\n"
+        f"{'=' * 80}\n"
+        f"storcli /c0 show\n"
+        f"{'=' * 80}\n"
+        f"{c0.rstrip()}\n"
+    )
 
-exit "$exit_code"
+
+def build_message(mail_to: str, subject: str, body: str) -> MIMEMultipart:
+    """Proxmox-style multipart/alternative with quoted-printable parts."""
+    msg = MIMEMultipart("alternative")
+    msg["To"] = mail_to
+    msg["Subject"] = subject
+    msg["Auto-Submitted"] = "auto-generated"
+
+    plain = MIMEText(body, "plain", "utf-8")
+    html_body = "<html><body><pre>" + html.escape(body) + "</pre></body></html>"
+    html_part = MIMEText(html_body, "html", "utf-8")
+    msg.attach(plain)
+    msg.attach(html_part)
+    return msg
+
+
+def send_mail(mail_to: str, subject: str, body: str, *, dry_run: bool) -> None:
+    if dry_run:
+        print(f"=== MAIL TO: {mail_to} ===")
+        print(f"Subject: {subject}")
+        print()
+        print(body)
+        return
+
+    msg = build_message(mail_to, subject, body)
+    raw = msg.as_bytes()
+
+    sendmail = shutil.which("sendmail")
+    if not sendmail:
+        raise SystemExit("sendmail not found; cannot send mail")
+
+    proc = subprocess.run(
+        [sendmail, "-t", "-oi"],
+        input=raw,
+        check=False,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or b"").decode("utf-8", errors="replace")
+        raise SystemExit(f"sendmail failed ({proc.returncode}): {err}")
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="MegaRAID health check via storcli")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--check",
+        action="store_const",
+        const="check",
+        dest="mode",
+        help="interval check: mail only on problems (default)",
+    )
+    mode.add_argument(
+        "--monthly",
+        action="store_const",
+        const="monthly",
+        dest="mode",
+        help="monthly summary: always mail full dumps + verdict",
+    )
+    p.set_defaults(mode="check")
+    p.add_argument("--show-file", type=Path, help="fixture instead of: storcli show")
+    p.add_argument("--c0-file", type=Path, help="fixture instead of: storcli /c0 show")
+    p.add_argument("--test-mail", action="store_true", help="send a test mail and exit")
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print mail that would be sent; do not send",
+    )
+    return p.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    mail_to = os.environ.get("CHECK_MEGARAID_MAIL_TO", "root")
+    storcli = os.environ.get("CHECK_MEGARAID_STORCLI", "storcli")
+    host = hostname_short()
+
+    if args.test_mail:
+        send_mail(
+            mail_to,
+            f"MegaRAID {host}: TEST",
+            f"Test message from check-megaraid on {host}.\n",
+            dry_run=args.dry_run,
+        )
+        return 0
+
+    show = load_show(storcli, args.show_file)
+    c0 = load_c0(storcli, args.c0_file)
+
+    findings: list[str] = []
+    parse_show(show, findings)
+    parse_c0(c0, findings)
+
+    healthy = not findings
+    verdict = "HEALTHY" if healthy else "UNHEALTHY"
+
+    if args.mode == "check":
+        if not healthy:
+            send_mail(
+                mail_to,
+                f"MegaRAID {host}: ALERT",
+                build_alert_body(host, verdict, findings, show, c0),
+                dry_run=args.dry_run,
+            )
+    elif args.mode == "monthly":
+        send_mail(
+            mail_to,
+            f"MegaRAID {host}: {verdict}",
+            build_monthly_body(host, verdict, findings, show, c0),
+            dry_run=args.dry_run,
+        )
+
+    return 0 if healthy else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
